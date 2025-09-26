@@ -1,5 +1,5 @@
 package com.displee.cache
 
-interface ProgressListener {
+fun interface ProgressListener {
     fun notify(progress: Double, message: String?)
 }
