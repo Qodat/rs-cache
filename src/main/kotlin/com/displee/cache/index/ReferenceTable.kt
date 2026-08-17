@@ -9,10 +9,15 @@ import com.displee.compress.CompressionType
 import com.displee.compress.decompress
 import com.displee.io.impl.InputBuffer
 import com.displee.io.impl.OutputBuffer
+import kotlinx.coroutines.*
 import java.util.*
 import kotlin.collections.ArrayList
+import kotlin.coroutines.CoroutineContext
 
-open class ReferenceTable(protected val origin: CacheLibrary, val id: Int) : Comparable<ReferenceTable> {
+open class ReferenceTable(protected val origin: CacheLibrary, val id: Int) : Comparable<ReferenceTable>, CoroutineScope {
+
+    override val coroutineContext: CoroutineContext
+        get() = Dispatchers.IO + SupervisorJob()
 
     var revision = 0
     private var mask = 0x0
@@ -167,24 +172,45 @@ open class ReferenceTable(protected val origin: CacheLibrary, val id: Int) : Com
     }
 
     @JvmOverloads
-    fun add(data: ByteArray, xtea: IntArray? = null): Archive {
-        val archive = add(xtea = xtea)
+    fun add(data: ByteArray, xtea: IntArray? = null): Archive = runBlocking {
+        addAsync(data, xtea)
+    }
+
+    @JvmOverloads
+    suspend fun addAsync(data: ByteArray, xtea: IntArray? = null): Archive {
+        val archive = addAsync(xtea = xtea)
         archive.add(data)
         return archive
     }
 
-    fun add(vararg archives: Archive?, overwrite: Boolean = true): Array<Archive> {
+    fun add(vararg archives: Archive?, overwrite: Boolean = true): Array<Archive> = runBlocking {
+        addAsync(*archives, overwrite = overwrite)
+    }
+
+    suspend fun addAsync(vararg archives: Archive?, overwrite: Boolean = true): Array<Archive> {
         val newArchives = ArrayList<Archive>(archives.size)
-        archives.forEach {
-            it ?: return@forEach
-            newArchives.add(add(it, overwrite = overwrite))
+
+        // Process archives in parallel
+        val jobs = archives.filterNotNull().map { archive ->
+            async {
+                add(archive, overwrite = overwrite)
+            }
         }
+
+        // Wait for all archives to be processed and collect results
+        newArchives.addAll(jobs.awaitAll())
+
         return newArchives.toTypedArray()
     }
 
     @JvmOverloads
-    fun add(archive: Archive, newId: Int = archive.id, xtea: IntArray? = null, overwrite: Boolean = true): Archive {
-        val new = add(newId, archive.hashName, xtea, overwrite)
+    fun add(archive: Archive, newId: Int = archive.id, xtea: IntArray? = null, overwrite: Boolean = true): Archive = runBlocking {
+        addAsync(archive, newId, xtea, overwrite)
+    }
+
+    @JvmOverloads
+    suspend fun addAsync(archive: Archive, newId: Int = archive.id, xtea: IntArray? = null, overwrite: Boolean = true): Archive {
+        val new = addAsync(newId, archive.hashName, xtea, overwrite)
         if (overwrite) {
             new.clear()
             new.add(*archive.copyFiles())
@@ -194,19 +220,29 @@ open class ReferenceTable(protected val origin: CacheLibrary, val id: Int) : Com
     }
 
     @JvmOverloads
-    fun add(name: String? = null, xtea: IntArray? = null): Archive {
+    fun add(name: String? = null, xtea: IntArray? = null): Archive = runBlocking {
+        addAsync(name, xtea)
+    }
+
+    @JvmOverloads
+    suspend fun addAsync(name: String? = null, xtea: IntArray? = null): Archive {
         var id = if (name == null) nextId() else archiveId(name)
         if (id == -1) {
             id = nextId()
         }
-        return add(id, toHash(name ?: ""), xtea)
+        return addAsync(id, toHash(name ?: ""), xtea)
     }
 
     @JvmOverloads
-    fun add(id: Int, hashName: Int = -1, xtea: IntArray? = null, overwrite: Boolean = true): Archive {
+    fun add(id: Int, hashName: Int = -1, xtea: IntArray? = null, overwrite: Boolean = true): Archive = runBlocking {
+        addAsync(id, hashName, xtea, overwrite)
+    }
+
+    @JvmOverloads
+    suspend fun addAsync(id: Int, hashName: Int = -1, xtea: IntArray? = null, overwrite: Boolean = true): Archive {
         var existing = archive(id, direct = true)
         if (existing != null && !existing.read && !existing.new && !existing.flagged()) {
-            existing = archive(id, xtea)
+            existing = archiveAsync(id, xtea)
         }
         if (existing == null) {
             if (this is Index317) {
@@ -253,23 +289,41 @@ open class ReferenceTable(protected val origin: CacheLibrary, val id: Int) : Com
         return archive(archiveId(name), direct)
     }
 
+    suspend fun archiveAsync(name: String, direct: Boolean = false): Archive? {
+        return archiveAsync(archiveId(name), direct)
+    }
+
     @JvmOverloads
     fun archive(name: String, xtea: IntArray? = null, direct: Boolean = false): Archive? {
         return archive(archiveId(name), xtea, direct)
+    }
+
+    @JvmOverloads
+    suspend fun archiveAsync(name: String, xtea: IntArray? = null, direct: Boolean = false): Archive? {
+        return archiveAsync(archiveId(name), xtea, direct)
     }
 
     fun archive(id: Int, direct: Boolean = false): Archive? {
         return archive(id, null, direct)
     }
 
+    suspend fun archiveAsync(id: Int, direct: Boolean = false): Archive? {
+        return archiveAsync(id, null, direct)
+    }
+
     @JvmOverloads
-    open fun archive(id: Int, xtea: IntArray? = null, direct: Boolean = false): Archive? {
+    open fun archive(id: Int, xtea: IntArray? = null, direct: Boolean = false): Archive? = runBlocking {
+        archiveAsync(id, xtea, direct)
+    }
+
+    @JvmOverloads
+    open suspend fun archiveAsync(id: Int, xtea: IntArray? = null, direct: Boolean = false): Archive? {
         check(!origin.closed) { "Cache is closed." }
         val archive = archives[id] ?: return null
         if (direct || archive.read || archive.new) {
             return archive
         }
-        val sector = origin.index(this.id).readArchiveSector(id)
+        val sector = origin.index(this.id).readArchiveSectorAsync(id)
         if (sector == null) {
             archive.read = true
             archive.new = true
@@ -325,18 +379,26 @@ open class ReferenceTable(protected val origin: CacheLibrary, val id: Int) : Com
         return remove(archiveId(name))
     }
 
-    fun first(): Archive? {
-        if (archives.isEmpty()) {
-            return null
-        }
-        return archive(archives.firstKey())
+    fun first(): Archive? = runBlocking {
+        firstAsync()
     }
 
-    fun last(): Archive? {
+    suspend fun firstAsync(): Archive? {
         if (archives.isEmpty()) {
             return null
         }
-        return archive(archives.lastKey())
+        return archiveAsync(archives.firstKey())
+    }
+
+    fun last(): Archive? = runBlocking {
+        lastAsync()
+    }
+
+    suspend fun lastAsync(): Archive? {
+        if (archives.isEmpty()) {
+            return null
+        }
+        return archiveAsync(archives.lastKey())
     }
 
     fun archiveId(name: String): Int {
@@ -417,6 +479,14 @@ open class ReferenceTable(protected val origin: CacheLibrary, val id: Int) : Com
 
     fun is317(): Boolean {
         return this is Index317
+    }
+
+    /**
+     * Cancels all coroutines launched in this scope.
+     * This should be called when the ReferenceTable is no longer needed.
+     */
+    open fun close() {
+        coroutineContext.cancel()
     }
 
     companion object {

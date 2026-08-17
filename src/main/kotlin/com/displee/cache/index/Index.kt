@@ -13,9 +13,14 @@ import com.displee.io.impl.InputBuffer
 import com.displee.io.impl.OutputBuffer
 import com.displee.util.generateCrc
 import com.displee.util.generateWhirlpool
+import kotlinx.coroutines.*
 import java.io.RandomAccessFile
+import kotlin.coroutines.CoroutineContext
 
-open class Index(origin: CacheLibrary, id: Int, val raf: RandomAccessFile) : ReferenceTable(origin, id) {
+open class Index(origin: CacheLibrary, id: Int, val raf: RandomAccessFile) : ReferenceTable(origin, id), CoroutineScope {
+
+    override val coroutineContext: CoroutineContext
+        get() = Dispatchers.IO + SupervisorJob()
 
     var crc = 0
     var whirlpool: ByteArray? = null
@@ -67,26 +72,41 @@ open class Index(origin: CacheLibrary, id: Int, val raf: RandomAccessFile) : Ref
     }
 
     @JvmOverloads
-    open fun update(listener: ProgressListener? = null): Boolean {
+    open fun update(listener: ProgressListener? = null): Boolean = runBlocking {
+        updateAsync(listener)
+    }
+
+    @JvmOverloads
+    open suspend fun updateAsync(listener: ProgressListener? = null): Boolean {
         check(!closed) { "Index is closed." }
         val flaggedArchives = flaggedArchives()
-        var i = 0.0
-        flaggedArchives.forEach {
-            i++
-            if (it.autoUpdateRevision) {
-                it.revision++
-            }
-            it.unFlag()
-            listener?.notify((i / flaggedArchives.size) * 0.80, "Repacking archive ${it.id}...")
-            val compressed = it.write().compress(it.compressionType, it.compressor, it.xtea, it.revision)
-            it.crc = compressed.generateCrc(length = compressed.size - 2)
-            it.whirlpool = compressed.generateWhirlpool(origin.whirlpool, length = compressed.size - 2)
-            val written = writeArchiveSector(it.id, compressed)
-            check(written) { "Unable to write data to archive sector. Your cache may be corrupt." }
-            if (origin.clearDataAfterUpdate) {
-                it.restore()
+
+        // Process archives in parallel
+        val results = flaggedArchives.mapIndexed { index, archive ->
+            async {
+                val progress = index.toDouble() / flaggedArchives.size
+                if (archive.autoUpdateRevision) {
+                    archive.revision++
+                }
+                archive.unFlag()
+                listener?.notify(progress * 0.80, "Repacking archive ${archive.id}...")
+                val compressed = archive.write().compress(archive.compressionType, archive.compressor, archive.xtea, archive.revision)
+                archive.crc = compressed.generateCrc(length = compressed.size - 2)
+                archive.whirlpool = compressed.generateWhirlpool(origin.whirlpool, length = compressed.size - 2)
+                val written = writeArchiveSectorAsync(archive.id, compressed)
+                if (!written) {
+                    throw IllegalStateException("Unable to write data to archive sector. Your cache may be corrupt.")
+                }
+                if (origin.clearDataAfterUpdate) {
+                    archive.restore()
+                }
+                true
             }
         }
+
+        // Wait for all archives to be processed
+        results.awaitAll()
+
         listener?.notify(0.85, "Updating checksum table for index $id...")
         if (flaggedArchives.isNotEmpty() && !flagged()) {
             flag()
@@ -106,12 +126,16 @@ open class Index(origin: CacheLibrary, id: Int, val raf: RandomAccessFile) : Ref
         return true
     }
 
-    fun readArchiveSector(id: Int): ArchiveSector? {
+    fun readArchiveSector(id: Int): ArchiveSector? = runBlocking {
+        readArchiveSectorAsync(id)
+    }
+
+    suspend fun readArchiveSectorAsync(id: Int): ArchiveSector? = withContext(Dispatchers.IO) {
         check(!closed) { "Index is closed." }
         synchronized(origin.mainFile) {
             try {
                 if (origin.mainFile.length() < INDEX_SIZE * id + INDEX_SIZE) {
-                    return null
+                    return@synchronized null
                 }
                 val sectorData = ByteArray(SECTOR_SIZE)
                 raf.seek(id.toLong() * INDEX_SIZE)
@@ -120,7 +144,7 @@ open class Index(origin: CacheLibrary, id: Int, val raf: RandomAccessFile) : Ref
                 val buffer = InputBuffer(sectorData)
                 val archiveSector = ArchiveSector(bigSector, buffer.read24BitInt(), buffer.read24BitInt())
                 if (archiveSector.size < 0 || archiveSector.position <= 0 || archiveSector.position > origin.mainFile.length() / SECTOR_SIZE) {
-                    return null
+                    return@synchronized null
                 }
                 var read = 0
                 var chunk = 0
@@ -128,7 +152,7 @@ open class Index(origin: CacheLibrary, id: Int, val raf: RandomAccessFile) : Ref
                 val sectorDataSize = if (bigSector) SECTOR_DATA_SIZE_BIG else SECTOR_DATA_SIZE_SMALL
                 while (read < archiveSector.size) {
                     if (archiveSector.position == 0) {
-                        return null
+                        return@synchronized null
                     }
                     var requiredToRead = archiveSector.size - read
                     if (requiredToRead > sectorDataSize) {
@@ -139,9 +163,9 @@ open class Index(origin: CacheLibrary, id: Int, val raf: RandomAccessFile) : Ref
                     buffer.offset = 0
                     archiveSector.read(buffer)
                     if (!isIndexValid(archiveSector.index) || id != archiveSector.id || chunk != archiveSector.chunk) {
-                        return null
+                        return@synchronized null
                     } else if (archiveSector.nextPosition < 0 || archiveSector.nextPosition > origin.mainFile.length() / SECTOR_SIZE) {
-                        return null
+                        return@synchronized null
                     }
                     val bufferData = buffer.raw()
                     for (i in 0 until requiredToRead) {
@@ -150,29 +174,33 @@ open class Index(origin: CacheLibrary, id: Int, val raf: RandomAccessFile) : Ref
                     archiveSector.position = archiveSector.nextPosition
                     chunk++
                 }
-                return archiveSector
+                return@synchronized archiveSector
             } catch (exception: Exception) {
-                return null
+                return@synchronized null
             }
         }
     }
 
-    fun writeArchiveSector(id: Int, data: ByteArray): Boolean {
+    fun writeArchiveSector(id: Int, data: ByteArray): Boolean = runBlocking {
+        writeArchiveSectorAsync(id, data)
+    }
+
+    suspend fun writeArchiveSectorAsync(id: Int, data: ByteArray): Boolean = withContext(Dispatchers.IO) {
         check(!closed) { "Index is closed." }
         synchronized(origin.mainFile) {
-            return try {
+            try {
                 var position: Int
                 var archive: Archive? = null
                 var archiveSector: ArchiveSector? = readArchiveSector(id)
-                if (this.id != 255) {
+                if (this@Index.id != 255) {
                     archive = archive(id, null, true)
                 }
-                var overWrite = this.id == 255 && archiveSector != null || archive?.new == false
+                var overWrite = this@Index.id == 255 && archiveSector != null || archive?.new == false
                 val sectorData = ByteArray(SECTOR_SIZE)
                 val bigSector = id > 65535
                 if (overWrite) {
                     if (INDEX_SIZE * id + INDEX_SIZE > raf.length()) {
-                        return false
+                        return@synchronized false
                     }
                     raf.seek(id.toLong() * INDEX_SIZE)
                     raf.read(sectorData, 0, INDEX_SIZE)
@@ -180,16 +208,16 @@ open class Index(origin: CacheLibrary, id: Int, val raf: RandomAccessFile) : Ref
                     buffer.offset += 3
                     position = buffer.read24BitInt()
                     if (position <= 0 || position > origin.mainFile.length() / SECTOR_SIZE) {
-                        return false
+                        return@synchronized false
                     }
                 } else {
                     position = ((origin.mainFile.length() + (SECTOR_SIZE - 1)) / SECTOR_SIZE).toInt()
                     if (position == 0) {
                         position = 1
                     }
-                    archiveSector = ArchiveSector(bigSector, data.size, position, id, indexToWrite(this.id))
+                    archiveSector = ArchiveSector(bigSector, data.size, position, id, indexToWrite(this@Index.id))
                 }
-                archiveSector ?: return false
+                archiveSector ?: return@synchronized false
                 val buffer = OutputBuffer(6)
                 buffer.write24BitInt(data.size)
                 buffer.write24BitInt(position)
@@ -207,10 +235,10 @@ open class Index(origin: CacheLibrary, id: Int, val raf: RandomAccessFile) : Ref
                         archiveSector.read(InputBuffer(sectorData))
                         currentPosition = archiveSector.nextPosition
                         if (archiveSector.id != id || archiveSector.chunk != chunk || !isIndexValid(archiveSector.index)) {
-                            return false
+                            return@synchronized false
                         }
                         if (currentPosition < 0 || origin.mainFile.length() / SECTOR_SIZE < currentPosition) {
-                            return false
+                            return@synchronized false
                         }
                     }
                     if (currentPosition == 0) {
@@ -239,43 +267,55 @@ open class Index(origin: CacheLibrary, id: Int, val raf: RandomAccessFile) : Ref
                     position = currentPosition
                     chunk++
                 }
-                true
+                return@synchronized true
             } catch (t: Throwable) {
                 t.printStackTrace()
-                false
+                return@synchronized false
             }
         }
     }
 
-    fun fixCRCs(update: Boolean) {
+    fun fixCRCs(update: Boolean) = runBlocking {
+        fixCRCsAsync(update)
+    }
+
+    suspend fun fixCRCsAsync(update: Boolean) = withContext(Dispatchers.IO) {
         check(!closed) { "Index is closed." }
         if (is317()) {
-            return
+            return@withContext
         }
         val archiveIds = archiveIds()
         var flag = false
-        for (i in archiveIds) {
-            val sector = readArchiveSector(i) ?: continue
-            val correctCRC = sector.data.generateCrc(length = sector.data.size - 2)
-            val archive = archive(i) ?: continue
-            val currentCRC = archive.crc
-            if (currentCRC == correctCRC) {
-                continue
+
+        // Process archives in parallel
+        val results = archiveIds.map { archiveId ->
+            async {
+                val sector = readArchiveSectorAsync(archiveId) ?: return@async false
+                val correctCRC = sector.data.generateCrc(length = sector.data.size - 2)
+                val archive = archive(archiveId) ?: return@async false
+                val currentCRC = archive.crc
+                if (currentCRC == correctCRC) {
+                    return@async false
+                }
+                println("Incorrect CRC in index $id -> archive $archiveId, current_crc=$currentCRC, correct_crc=$correctCRC")
+                archive.flag()
+                return@async true
             }
-            println("Incorrect CRC in index $id -> archive $i, current_crc=$currentCRC, correct_crc=$correctCRC")
-            archive.flag()
-            flag = true
         }
-        val sectorData = origin.index255?.readArchiveSector(id)?.data ?: return
+
+        // Check if any archive has incorrect CRC
+        flag = results.awaitAll().any { it }
+
+        val sectorData = origin.index255?.readArchiveSector(id)?.data ?: return@withContext
         val indexCRC = sectorData.generateCrc()
         if (crc != indexCRC) {
             flag = true
         }
         if (flag && update) {
-            update()
+            updateAsync()
         } else if (!flag) {
             println("No invalid CRCs found.")
-            return
+            return@withContext
         }
         unCache()
     }
@@ -289,12 +329,15 @@ open class Index(origin: CacheLibrary, id: Int, val raf: RandomAccessFile) : Ref
         whirlpool = ByteArray(WHIRLPOOL_SIZE)
     }
 
-    fun close() {
+    override fun close() {
         if (closed) {
             return
         }
         raf.close()
         closed = true
+
+        // Cancel all coroutines
+        coroutineContext.cancel()
     }
 
     fun flaggedArchives(): Array<Archive> {
