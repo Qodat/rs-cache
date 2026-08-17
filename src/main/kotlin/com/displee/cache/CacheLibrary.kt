@@ -16,14 +16,25 @@ import com.displee.io.Buffer
 import com.displee.io.impl.OutputBuffer
 import com.displee.util.Whirlpool
 import com.displee.util.generateWhirlpool
+import kotlinx.coroutines.*
 import java.io.File
 import java.io.FileNotFoundException
 import java.io.IOException
 import java.io.RandomAccessFile
 import java.math.BigInteger
 import java.util.*
+import java.util.concurrent.ConcurrentHashMap
+import kotlin.coroutines.CoroutineContext
 
-open class CacheLibrary(val path: String, val clearDataAfterUpdate: Boolean = false, private val listener: ProgressListener? = null) {
+open class CacheLibrary(
+    val path: String, 
+    val clearDataAfterUpdate: Boolean = false, 
+    private val listener: ProgressListener? = null,
+    private val dispatcher: CoroutineDispatcher = Dispatchers.IO
+) : CoroutineScope {
+
+    override val coroutineContext: CoroutineContext
+        get() = dispatcher + SupervisorJob()
 
     lateinit var mainFile: RandomAccessFile
 
@@ -61,7 +72,7 @@ open class CacheLibrary(val path: String, val clearDataAfterUpdate: Boolean = fa
     }
 
     @Throws(IOException::class)
-    private fun load() {
+    private fun load() = runBlocking {
         val main = File(path, "$CACHE_FILE_NAME.dat2")
         mainFile = if (main.exists()) {
             RandomAccessFile(main, "rw")
@@ -74,32 +85,39 @@ open class CacheLibrary(val path: String, val clearDataAfterUpdate: Boolean = fa
             listener?.notify(-1.0, "Error, checksum file could not be found.")
             throw FileNotFoundException("File[path=${index255File.absolutePath}] could not be found.")
         }
-        val index255 = Index255(this, RandomAccessFile(index255File, "rw"))
-        this.index255 = index255
+        val index255 = Index255(this@CacheLibrary, RandomAccessFile(index255File, "rw"))
+        this@CacheLibrary.index255 = index255
         listener?.notify(0.0, "Reading indices...")
         val indicesLength = index255.raf.length().toInt() / INDEX_SIZE
         rs3 = indicesLength > 39
-        for (i in 0 until indicesLength) {
-            val file = File(path, "$CACHE_FILE_NAME.idx$i")
-            val progress = i / (indicesLength - 1.0)
-            if (!file.exists()) {
-                indices[i] = null
-                listener?.notify(progress, "Could not load index $i, missing idx file.")
-                continue
-            }
-            try {
-                indices[i] = Index(this, i, RandomAccessFile(file, "rw"))
-                listener?.notify(progress, "Loaded index $i.")
-            } catch (e: Exception) {
-                indices[i] = null
-                e.printStackTrace()
-                listener?.notify(progress, "Failed to load index $i.")
+
+        // Load indices in parallel
+        val jobs = (0 until indicesLength).map { i ->
+            async(dispatcher) {
+                val file = File(path, "$CACHE_FILE_NAME.idx$i")
+                val progress = i / (indicesLength - 1.0)
+                if (!file.exists()) {
+                    indices[i] = null
+                    listener?.notify(progress, "Could not load index $i, missing idx file.")
+                    return@async
+                }
+                try {
+                    indices[i] = Index(this@CacheLibrary, i, RandomAccessFile(file, "rw"))
+                    listener?.notify(progress, "Loaded index $i.")
+                } catch (e: Exception) {
+                    indices[i] = null
+                    e.printStackTrace()
+                    listener?.notify(progress, "Failed to load index $i.")
+                }
             }
         }
+
+        // Wait for all indices to be loaded
+        jobs.awaitAll()
     }
 
     @Throws(IOException::class)
-    private fun load317() {
+    private fun load317() = runBlocking {
         val main = File(path, "$CACHE_FILE_NAME.dat")
         mainFile = if (main.exists()) {
             RandomAccessFile(main, "rw")
@@ -112,22 +130,29 @@ open class CacheLibrary(val path: String, val clearDataAfterUpdate: Boolean = fa
         }
         check(indexFiles != null) { "Files are null. Check your cache path." }
         listener?.notify(0.0, "Reading indices...")
-        for (i in indexFiles.indices) {
-            val file = File(path, "$CACHE_FILE_NAME.idx$i")
-            val progress = i / (indexFiles.size - 1.0)
-            if (!file.exists()) {
-                indices[i] = null
-                continue
-            }
-            try {
-                indices[i] = Index317(this, i, RandomAccessFile(file, "rw"))
-                listener?.notify(progress, "Loaded index $i .")
-            } catch (e: Exception) {
-                indices[i] = null
-                e.printStackTrace()
-                listener?.notify(progress, "Failed to load index $i.")
+
+        // Load indices in parallel
+        val jobs = indexFiles.indices.map { i ->
+            async(dispatcher) {
+                val file = File(path, "$CACHE_FILE_NAME.idx$i")
+                val progress = i / (indexFiles.size - 1.0)
+                if (!file.exists()) {
+                    indices[i] = null
+                    return@async
+                }
+                try {
+                    indices[i] = Index317(this@CacheLibrary, i, RandomAccessFile(file, "rw"))
+                    listener?.notify(progress, "Loaded index $i .")
+                } catch (e: Exception) {
+                    indices[i] = null
+                    e.printStackTrace()
+                    listener?.notify(progress, "Failed to load index $i.")
+                }
             }
         }
+
+        // Wait for all indices to be loaded
+        jobs.awaitAll()
     }
 
     @JvmOverloads
@@ -180,10 +205,22 @@ open class CacheLibrary(val path: String, val clearDataAfterUpdate: Boolean = fa
     }
 
     @JvmOverloads
+    suspend fun putAsync(index: Int, archive: Int, file: Int, data: ByteArray, xtea: IntArray? = null): com.displee.cache.index.archive.file.File = withContext(dispatcher) {
+        index(index).add(archive, xtea = xtea).add(file, data)
+    }
+
+    @JvmOverloads
     fun put(index: Int, archive: Int, data: ByteArray, xtea: IntArray? = null): Archive {
         val currentArchive = index(index).add(archive, -1, xtea)
         currentArchive.add(0, data)
         return currentArchive
+    }
+
+    @JvmOverloads
+    suspend fun putAsync(index: Int, archive: Int, data: ByteArray, xtea: IntArray? = null): Archive = withContext(dispatcher) {
+        val currentArchive = index(index).add(archive, -1, xtea)
+        currentArchive.add(0, data)
+        currentArchive
     }
 
     @JvmOverloads
@@ -192,8 +229,18 @@ open class CacheLibrary(val path: String, val clearDataAfterUpdate: Boolean = fa
     }
 
     @JvmOverloads
+    suspend fun putAsync(index: Int, archive: Int, file: String, data: ByteArray, xtea: IntArray? = null): com.displee.cache.index.archive.file.File = withContext(dispatcher) {
+        index(index).add(archive, xtea = xtea).add(file, data)
+    }
+
+    @JvmOverloads
     fun put(index: Int, archive: String, data: ByteArray, xtea: IntArray? = null): Archive {
         return put(index, archive, 0, data, xtea)
+    }
+
+    @JvmOverloads
+    suspend fun putAsync(index: Int, archive: String, data: ByteArray, xtea: IntArray? = null): Archive {
+        return putAsync(index, archive, 0, data, xtea)
     }
 
     @JvmOverloads
@@ -204,8 +251,20 @@ open class CacheLibrary(val path: String, val clearDataAfterUpdate: Boolean = fa
     }
 
     @JvmOverloads
+    suspend fun putAsync(index: Int, archive: String, file: Int, data: ByteArray, xtea: IntArray? = null): Archive = withContext(dispatcher) {
+        val currentArchive = index(index).add(archive, xtea = xtea)
+        currentArchive.add(file, data)
+        currentArchive
+    }
+
+    @JvmOverloads
     fun put(index: Int, archive: String, file: String, data: ByteArray, xtea: IntArray? = null): com.displee.cache.index.archive.file.File {
         return index(index).add(archive, xtea = xtea).add(file, data)
+    }
+
+    @JvmOverloads
+    suspend fun putAsync(index: Int, archive: String, file: String, data: ByteArray, xtea: IntArray? = null): com.displee.cache.index.archive.file.File = withContext(dispatcher) {
+        index(index).add(archive, xtea = xtea).add(file, data)
     }
 
     @JvmOverloads
@@ -214,8 +273,18 @@ open class CacheLibrary(val path: String, val clearDataAfterUpdate: Boolean = fa
     }
 
     @JvmOverloads
+    suspend fun dataAsync(index: Int, archive: Int, file: Int = 0, xtea: IntArray? = null): ByteArray? = withContext(dispatcher) {
+        index(index).archive(archive, xtea)?.file(file)?.data
+    }
+
+    @JvmOverloads
     fun data(index: Int, archive: Int, file: String, xtea: IntArray? = null): ByteArray? {
         return index(index).archive(archive, xtea)?.file(file)?.data
+    }
+
+    @JvmOverloads
+    suspend fun dataAsync(index: Int, archive: Int, file: String, xtea: IntArray? = null): ByteArray? = withContext(dispatcher) {
+        index(index).archive(archive, xtea)?.file(file)?.data
     }
 
     @JvmOverloads
@@ -224,13 +293,28 @@ open class CacheLibrary(val path: String, val clearDataAfterUpdate: Boolean = fa
     }
 
     @JvmOverloads
+    suspend fun dataAsync(index: Int, archive: String, file: Int, xtea: IntArray? = null): ByteArray? = withContext(dispatcher) {
+        index(index).archive(archive, xtea)?.file(file)?.data
+    }
+
+    @JvmOverloads
     fun data(index: Int, archive: String, file: String, xtea: IntArray? = null): ByteArray? {
         return index(index).archive(archive, xtea)?.file(file)?.data
     }
 
     @JvmOverloads
+    suspend fun dataAsync(index: Int, archive: String, file: String, xtea: IntArray? = null): ByteArray? = withContext(dispatcher) {
+        index(index).archive(archive, xtea)?.file(file)?.data
+    }
+
+    @JvmOverloads
     fun data(index: Int, archive: String, xtea: IntArray? = null): ByteArray? {
         return data(index, archive, 0, xtea)
+    }
+
+    @JvmOverloads
+    suspend fun dataAsync(index: Int, archive: String, xtea: IntArray? = null): ByteArray? {
+        return dataAsync(index, archive, 0, xtea)
     }
 
     fun remove(index: Int, archive: Int, file: Int): com.displee.cache.index.archive.file.File? {
@@ -257,16 +341,22 @@ open class CacheLibrary(val path: String, val clearDataAfterUpdate: Boolean = fa
         return index(index).remove(archive)
     }
 
-    fun update() {
-        for (index in indices) {
-            if (index == null) {
-                continue
-            }
-            if (index.flaggedArchives().isEmpty() && !index.flagged()) {
-                continue
-            }
-            index.update()
+    fun update() = runBlocking {
+        updateAsync()
+    }
+
+    suspend fun updateAsync() {
+        val indicesToUpdate = indices.filterNotNull().filter { 
+            it.flaggedArchives().isNotEmpty() || it.flagged() 
         }
+
+        val jobs = indicesToUpdate.map { index ->
+            async(dispatcher) {
+                index.updateAsync()
+            }
+        }
+
+        jobs.awaitAll()
     }
 
     @Throws(RuntimeException::class)
@@ -310,7 +400,11 @@ open class CacheLibrary(val path: String, val clearDataAfterUpdate: Boolean = fa
         return buffer.array()
     }
 
-    fun rebuild(directory: File) {
+    fun rebuild(directory: File) = runBlocking {
+        rebuildAsync(directory)
+    }
+
+    suspend fun rebuildAsync(directory: File) {
         File(directory.path).mkdirs()
         if (is317()) {
             File(directory.path, "$CACHE_FILE_NAME.dat").createNewFile()
@@ -320,37 +414,55 @@ open class CacheLibrary(val path: String, val clearDataAfterUpdate: Boolean = fa
         }
         val indicesSize = indices.count { it != null }
         val newLibrary = CacheLibrary(directory.path)
-        for (index in indices) {
-            if (index == null) {
-                continue
-            }
-            val id = index.id
-            print("\rBuilding index $id/$indicesSize...")
-            val archiveSector = index255?.readArchiveSector(id)
-            var writeReferenceTable = true
-            if (!is317() && archiveSector == null) { //some empty indices don't even have a reference table
-                writeReferenceTable = false //in that case, don't write it
-            }
-            val newIndex = newLibrary.createIndex(index, writeReferenceTable)
-            for (i in index.archiveIds()) { //only write referenced archives
-                val data = index.readArchiveSector(i)?.data ?: continue
-                newIndex.writeArchiveSector(i, data)
-            }
-            if (archiveSector != null) {
-                newLibrary.index255?.writeArchiveSector(id, archiveSector.data)
+
+        // Process indices in parallel
+        val jobs = indices.filterNotNull().map { index ->
+            async(dispatcher) {
+                val id = index.id
+                print("\rBuilding index $id/$indicesSize...")
+                val archiveSector = index255?.readArchiveSector(id)
+                var writeReferenceTable = true
+                if (!is317() && archiveSector == null) { //some empty indices don't even have a reference table
+                    writeReferenceTable = false //in that case, don't write it
+                }
+                val newIndex = newLibrary.createIndex(index, writeReferenceTable)
+
+                // Process archives in parallel
+                val archiveJobs = index.archiveIds().map { archiveId ->
+                    async(dispatcher) {
+                        val data = index.readArchiveSector(archiveId)?.data ?: return@async
+                        newIndex.writeArchiveSector(archiveId, data)
+                    }
+                }
+                archiveJobs.awaitAll()
+
+                if (archiveSector != null) {
+                    newLibrary.index255?.writeArchiveSector(id, archiveSector.data)
+                }
             }
         }
+
+        // Wait for all indices to be processed
+        jobs.awaitAll()
+
         newLibrary.close()
         println("\rFinished building $indicesSize indices.")
     }
 
-    fun fixCrcs(update: Boolean) {
-        for(index in indices) {
-            if (index == null || index.archiveIds().isEmpty()) {
-                continue
+    fun fixCrcs(update: Boolean) = runBlocking {
+        fixCrcsAsync(update)
+    }
+
+    suspend fun fixCrcsAsync(update: Boolean) {
+        val jobs = indices.filterNotNull().filter { 
+            it.archiveIds().isNotEmpty() 
+        }.map { index ->
+            async(dispatcher) {
+                index.fixCRCsAsync(update)
             }
-            index.fixCRCs(update)
         }
+
+        jobs.awaitAll()
     }
 
     fun close() {
@@ -363,6 +475,9 @@ open class CacheLibrary(val path: String, val clearDataAfterUpdate: Boolean = fa
             index?.close()
         }
         closed = true
+
+        // Cancel all coroutines
+        coroutineContext.cancel()
     }
 
     fun first(): Index? {
