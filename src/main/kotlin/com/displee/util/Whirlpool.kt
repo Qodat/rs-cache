@@ -10,163 +10,220 @@ class Whirlpool {
     private val buffer = ByteArray(64)
     private var bufferBits = 0
     private var bufferPosition = 0
+
+    // Lock object for synchronization
+    private val lock = Any()
     fun NESSIEinit() {
-        for (i in 0..31) {
-            bitLength[i] = 0.toByte()
-        }
-        bufferPosition = 0
-        bufferBits = 0
-        buffer[0] = 0.toByte()
-        for (i_3_ in 0..7) {
-            hash[i_3_] = 0L
+        synchronized(lock) {
+            for (i in 0..31) {
+                bitLength[i] = 0.toByte()
+            }
+            bufferPosition = 0
+            bufferBits = 0
+            buffer[0] = 0.toByte()
+            for (i_3_ in 0..7) {
+                hash[i_3_] = 0L
+            }
         }
     }
 
     private fun processBuffer() {
-        var i_4_ = 0
-        var i_5_ = 0
-        while (i_4_ < 8) {
-            block[i_4_] =
-                buffer[i_5_].toLong() shl 56 xor (buffer[i_5_ + 1].toLong() and 0xffL shl 48) xor (buffer[2 + i_5_].toLong() and 0xffL shl 40) xor (buffer[i_5_ + 3].toLong() and 0xffL shl 32) xor (buffer[i_5_ + 4].toLong() and 0xffL shl 24) xor (buffer[5 + i_5_].toLong() and 0xffL shl 16) xor (buffer[i_5_ + 6].toLong() and 0xffL shl 8) xor (buffer[7 + i_5_].toLong() and 0xffL)
-            i_4_++
-            i_5_ += 8
-        }
-        i_4_ = 0
-        while (i_4_ < 8) {
-            state[i_4_] = block[i_4_] xor hash[i_4_].also { aLongArray6637[i_4_] = it }
-            i_4_++
-        }
-        i_4_ = 1
-        while (i_4_ <= 10) {
-            i_5_ = 0
-            while (i_5_ < 8) {
-                aLongArray6638[i_5_] = 0L
-                var i_6_ = 0
-                var i_7_ = 56
-                while (i_6_ < 8) {
-                    aLongArray6638[i_5_] = aLongArray6638[i_5_] xor aLongArrayArray6630[i_6_][(aLongArray6637[i_5_ - i_6_ and 0x7] ushr i_7_).toInt() and 0xff]
-                    i_6_++
-                    i_7_ -= 8
+        // No need to synchronize here as it's called from synchronized methods
+        // But we'll add synchronization for safety in case it's called from elsewhere
+        synchronized(lock) {
+            var i_4_ = 0
+            var i_5_ = 0
+            while (i_4_ < 8) {
+                block[i_4_] =
+                    buffer[i_5_].toLong() shl 56 xor (buffer[i_5_ + 1].toLong() and 0xffL shl 48) xor (buffer[2 + i_5_].toLong() and 0xffL shl 40) xor (buffer[i_5_ + 3].toLong() and 0xffL shl 32) xor (buffer[i_5_ + 4].toLong() and 0xffL shl 24) xor (buffer[5 + i_5_].toLong() and 0xffL shl 16) xor (buffer[i_5_ + 6].toLong() and 0xffL shl 8) xor (buffer[7 + i_5_].toLong() and 0xffL)
+                i_4_++
+                i_5_ += 8
+            }
+            i_4_ = 0
+            while (i_4_ < 8) {
+                state[i_4_] = block[i_4_] xor hash[i_4_].also { aLongArray6637[i_4_] = it }
+                i_4_++
+            }
+            i_4_ = 1
+            while (i_4_ <= 10) {
+                i_5_ = 0
+                while (i_5_ < 8) {
+                    aLongArray6638[i_5_] = 0L
+                    var i_6_ = 0
+                    var i_7_ = 56
+                    while (i_6_ < 8) {
+                        aLongArray6638[i_5_] = aLongArray6638[i_5_] xor aLongArrayArray6630[i_6_][(aLongArray6637[i_5_ - i_6_ and 0x7] ushr i_7_).toInt() and 0xff]
+                        i_6_++
+                        i_7_ -= 8
+                    }
+                    i_5_++
                 }
-                i_5_++
-            }
-            i_5_ = 0
-            while (i_5_ < 8) {
-                aLongArray6637[i_5_] = aLongArray6638[i_5_]
-                i_5_++
-            }
-            aLongArray6637[0] = aLongArray6637[0] xor aLongArray6631[i_4_]
-            i_5_ = 0
-            while (i_5_ < 8) {
-                aLongArray6638[i_5_] = aLongArray6637[i_5_]
-                var i_8_ = 0
-                var i_9_ = 56
-                while (i_8_ < 8) {
-                    aLongArray6638[i_5_] = aLongArray6638[i_5_] xor aLongArrayArray6630[i_8_][(state[i_5_ - i_8_ and 0x7] ushr i_9_).toInt() and 0xff]
-                    i_8_++
-                    i_9_ -= 8
+                i_5_ = 0
+                while (i_5_ < 8) {
+                    aLongArray6637[i_5_] = aLongArray6638[i_5_]
+                    i_5_++
                 }
-                i_5_++
+                aLongArray6637[0] = aLongArray6637[0] xor aLongArray6631[i_4_]
+                i_5_ = 0
+                while (i_5_ < 8) {
+                    aLongArray6638[i_5_] = aLongArray6637[i_5_]
+                    var i_8_ = 0
+                    var i_9_ = 56
+                    while (i_8_ < 8) {
+                        aLongArray6638[i_5_] = aLongArray6638[i_5_] xor aLongArrayArray6630[i_8_][(state[i_5_ - i_8_ and 0x7] ushr i_9_).toInt() and 0xff]
+                        i_8_++
+                        i_9_ -= 8
+                    }
+                    i_5_++
+                }
+                i_5_ = 0
+                while (i_5_ < 8) {
+                    state[i_5_] = aLongArray6638[i_5_]
+                    i_5_++
+                }
+                i_4_++
             }
-            i_5_ = 0
-            while (i_5_ < 8) {
-                state[i_5_] = aLongArray6638[i_5_]
-                i_5_++
+            i_4_ = 0
+            while (i_4_ < 8) {
+                hash[i_4_] = hash[i_4_] xor (state[i_4_] xor block[i_4_])
+                i_4_++
             }
-            i_4_++
-        }
-        i_4_ = 0
-        while (i_4_ < 8) {
-            hash[i_4_] = hash[i_4_] xor (state[i_4_] xor block[i_4_])
-            i_4_++
         }
     }
 
     fun NESSIEfinalize(digest: ByteArray, i: Int) {
-        buffer[bufferPosition] = (buffer[bufferPosition].toInt() or (128 ushr (bufferBits and 0x7))).toByte()
-        ++bufferPosition
-        if (bufferPosition > 32) {
-            while (bufferPosition < 64) {
+        synchronized(lock) {
+            // Check buffer bounds
+            if (bufferPosition >= buffer.size) {
+                processBuffer()
+                bufferPosition = 0
+                bufferBits = 0
+            }
+            buffer[bufferPosition] = (buffer[bufferPosition].toInt() or (128 ushr (bufferBits and 0x7))).toByte()
+            ++bufferPosition
+            if (bufferPosition > 32) {
+                while (bufferPosition < 64) {
+                    // Check buffer bounds
+                    if (bufferPosition >= buffer.size) {
+                        processBuffer()
+                        bufferPosition = 0
+                        bufferBits = 0
+                        break
+                    }
+                    buffer[bufferPosition++] = 0.toByte()
+                }
+                processBuffer()
+                bufferPosition = 0
+            }
+            while (bufferPosition < 32) {
+                // Check buffer bounds
+                if (bufferPosition >= buffer.size) {
+                    processBuffer()
+                    bufferPosition = 0
+                    bufferBits = 0
+                    break
+                }
                 buffer[bufferPosition++] = 0.toByte()
             }
+            System.arraycopy(bitLength, 0, buffer, 32, 32)
             processBuffer()
-            bufferPosition = 0
-        }
-        while (bufferPosition < 32) {
-            buffer[bufferPosition++] = 0.toByte()
-        }
-        System.arraycopy(bitLength, 0, buffer, 32, 32)
-        processBuffer()
-        var i_16_ = 0
-        var i_17_ = i
-        while (i_16_ < 8) {
-            val l = hash[i_16_]
-            digest[i_17_] = (l ushr 56).toInt().toByte()
-            digest[i_17_ + 1] = (l ushr 48).toInt().toByte()
-            digest[i_17_ + 2] = (l ushr 40).toInt().toByte()
-            digest[i_17_ + 3] = (l ushr 32).toInt().toByte()
-            digest[i_17_ + 4] = (l ushr 24).toInt().toByte()
-            digest[i_17_ + 5] = (l ushr 16).toInt().toByte()
-            digest[i_17_ + 6] = (l ushr 8).toInt().toByte()
-            digest[i_17_ + 7] = l.toInt().toByte()
-            i_16_++
-            i_17_ += 8
+            var i_16_ = 0
+            var i_17_ = i
+            while (i_16_ < 8) {
+                val l = hash[i_16_]
+                digest[i_17_] = (l ushr 56).toInt().toByte()
+                digest[i_17_ + 1] = (l ushr 48).toInt().toByte()
+                digest[i_17_ + 2] = (l ushr 40).toInt().toByte()
+                digest[i_17_ + 3] = (l ushr 32).toInt().toByte()
+                digest[i_17_ + 4] = (l ushr 24).toInt().toByte()
+                digest[i_17_ + 5] = (l ushr 16).toInt().toByte()
+                digest[i_17_ + 6] = (l ushr 8).toInt().toByte()
+                digest[i_17_ + 7] = l.toInt().toByte()
+                i_16_++
+                i_17_ += 8
+            }
         }
     }
 
     fun NESSIEadd(source: ByteArray, sourceBits: Long) {
-        var sourceBits = sourceBits
-        var i = 0
-        val i_23_ = 8 - (sourceBits.toInt() and 0x7) and 0x7
-        val i_24_ = bufferBits and 0x7
-        var l_25_ = sourceBits
-        var i_26_ = 31
-        var i_27_ = 0
-        while ( /**/i_26_ >= 0) {
-            i_27_ += (bitLength[i_26_].toInt() and 0xff) + (l_25_.toInt() and 0xff)
-            bitLength[i_26_] = i_27_.toByte()
-            i_27_ = i_27_ ushr 8
-            l_25_ = l_25_ ushr 8
-            i_26_--
-        }
-        while (sourceBits > 8L) {
-            val i_28_ = source[i].toInt() shl i_23_ and 0xff or (source[i + 1].toInt() and 0xff ushr 8 - i_23_)
-            if (i_28_ < 0 || i_28_ >= 256) {
-                throw RuntimeException()
+        synchronized(lock) {
+            var sourceBits = sourceBits
+            var i = 0
+            val i_23_ = 8 - (sourceBits.toInt() and 0x7) and 0x7
+            val i_24_ = bufferBits and 0x7
+            var l_25_ = sourceBits
+            var i_26_ = 31
+            var i_27_ = 0
+            while ( /**/i_26_ >= 0) {
+                i_27_ += (bitLength[i_26_].toInt() and 0xff) + (l_25_.toInt() and 0xff)
+                bitLength[i_26_] = i_27_.toByte()
+                i_27_ = i_27_ ushr 8
+                l_25_ = l_25_ ushr 8
+                i_26_--
             }
-            buffer[bufferPosition] = (buffer[bufferPosition].toInt() or (i_28_ ushr i_24_)).toByte()
-            ++bufferPosition
-            bufferBits += 8 - i_24_
-            if (bufferBits == 512) {
-                processBuffer()
-                bufferPosition = 0
-                bufferBits = 0
+            while (sourceBits > 8L) {
+                val i_28_ = source[i].toInt() shl i_23_ and 0xff or (source[i + 1].toInt() and 0xff ushr 8 - i_23_)
+                if (i_28_ < 0 || i_28_ >= 256) {
+                    throw RuntimeException()
+                }
+                // Check buffer bounds
+                if (bufferPosition >= buffer.size) {
+                    processBuffer()
+                    bufferPosition = 0
+                    bufferBits = 0
+                }
+                buffer[bufferPosition] = (buffer[bufferPosition].toInt() or (i_28_ ushr i_24_)).toByte()
+                ++bufferPosition
+                bufferBits += 8 - i_24_
+                if (bufferBits == 512) {
+                    processBuffer()
+                    bufferPosition = 0
+                    bufferBits = 0
+                }
+                // Check buffer bounds again
+                if (bufferPosition >= buffer.size) {
+                    processBuffer()
+                    bufferPosition = 0
+                    bufferBits = 0
+                }
+                buffer[bufferPosition] = (i_28_ shl 8 - i_24_ and 0xff).toByte()
+                bufferBits += i_24_
+                sourceBits -= 8L
+                i++
             }
-            buffer[bufferPosition] = (i_28_ shl 8 - i_24_ and 0xff).toByte()
-            bufferBits += i_24_
-            sourceBits -= 8L
-            i++
-        }
-        val i_29_: Int
-        if (sourceBits > 0L) {
-            i_29_ = source[i].toInt() shl i_23_ and 0xff
-            buffer[bufferPosition] = (buffer[bufferPosition].toInt() or (i_29_ ushr i_24_)).toByte()
-        } else {
-            i_29_ = 0
-        }
-        if (i_24_.toLong() + sourceBits < 8L) {
-            bufferBits += sourceBits.toInt()
-        } else {
-            ++bufferPosition
-            bufferBits += 8 - i_24_
-            sourceBits -= (8 - i_24_).toLong()
-            if (bufferBits == 512) {
-                processBuffer()
-                bufferPosition = 0
-                bufferBits = 0
+            val i_29_: Int
+            if (sourceBits > 0L) {
+                i_29_ = source[i].toInt() shl i_23_ and 0xff
+                // Check buffer bounds
+                if (bufferPosition >= buffer.size) {
+                    processBuffer()
+                    bufferPosition = 0
+                    bufferBits = 0
+                }
+                buffer[bufferPosition] = (buffer[bufferPosition].toInt() or (i_29_ ushr i_24_)).toByte()
+            } else {
+                i_29_ = 0
             }
-            buffer[bufferPosition] = (i_29_ shl 8 - i_24_ and 0xff).toByte()
-            bufferBits += sourceBits.toInt()
+            if (i_24_.toLong() + sourceBits < 8L) {
+                bufferBits += sourceBits.toInt()
+            } else {
+                ++bufferPosition
+                bufferBits += 8 - i_24_
+                sourceBits -= (8 - i_24_).toLong()
+                if (bufferBits == 512) {
+                    processBuffer()
+                    bufferPosition = 0
+                    bufferBits = 0
+                }
+                // Check buffer bounds
+                if (bufferPosition >= buffer.size) {
+                    processBuffer()
+                    bufferPosition = 0
+                    bufferBits = 0
+                }
+                buffer[bufferPosition] = (i_29_ shl 8 - i_24_ and 0xff).toByte()
+                bufferBits += sourceBits.toInt()
+            }
         }
     }
 

@@ -22,38 +22,47 @@ class BZIP2Compressor : Compressor {
     private var anIntArray5786: IntArray = IntArray(100000)
 
     /**
+     * Lock object for synchronization
+     */
+    private val lock = Any()
+
+    /**
      * Compress a decompressed BZIP2 file.
      * @param bytes The uncompressed BZIP2 file.
      * @return The compressed BZIP2 file.
      */
     override fun compress(bytes: ByteArray): ByteArray {
-        var bytes = bytes
-        try {
-            ByteArrayInputStream(bytes).use { stream ->
-                val bout = ByteArrayOutputStream()
-                CBZip2OutputStream(bout, 1).use { os ->
-                    val buf = ByteArray(4096)
-                    var len: Int
-                    while (stream.read(buf, 0, buf.size).also { len = it } != -1) {
-                        os.write(buf, 0, len)
+        synchronized(lock) {
+            var bytes = bytes
+            try {
+                ByteArrayInputStream(bytes).use { stream ->
+                    val bout = ByteArrayOutputStream()
+                    CBZip2OutputStream(bout, 1).use { os ->
+                        val buf = ByteArray(4096)
+                        var len: Int
+                        while (stream.read(buf, 0, buf.size).also { len = it } != -1) {
+                            os.write(buf, 0, len)
+                        }
                     }
+                    bytes = bout.toByteArray()
+                    val bzip2 = ByteArray(bytes.size - 2)
+                    System.arraycopy(bytes, 2, bzip2, 0, bzip2.size)
+                    return bzip2
                 }
-                bytes = bout.toByteArray()
-                val bzip2 = ByteArray(bytes.size - 2)
-                System.arraycopy(bytes, 2, bzip2, 0, bzip2.size)
-                return bzip2
+            } catch (e: Exception) {
+                e.printStackTrace()
+                return byteArrayOf()
             }
-        } catch (e: Exception) {
-            e.printStackTrace()
-            return byteArrayOf()
         }
     }
 
     override fun decompress(buffer: InputBuffer, compressedSize: Int, decompressedSize: Int): ByteArray {
-        val decompressed = ByteArray(decompressedSize)
-        val compressed = buffer.readBytes(compressedSize)
-        decompress(decompressed, decompressed.size, compressed, compressedSize, 0)
-        return decompressed
+        synchronized(lock) {
+            val decompressed = ByteArray(decompressedSize)
+            val compressed = buffer.readBytes(compressedSize)
+            decompress(decompressed, decompressed.size, compressed, compressedSize, 0)
+            return decompressed
+        }
     }
 
     /**

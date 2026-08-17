@@ -34,18 +34,20 @@ class LZMACompressor : Compressor {
     }
 
     override fun compress(bytes: ByteArray): ByteArray {
-        val baos = ByteArrayOutputStream()
-        try {
-            val bais = ByteArrayInputStream(bytes)
-            val lzma = LzmaOutputStream(baos, ENCODER_WRAPPER)
-            bais.writeTo(lzma)
-            baos.close()
-            lzma.close()
-            bais.close()
-        } catch (e: IOException) {
-            e.printStackTrace()
+        synchronized(ENCODER) {
+            val baos = ByteArrayOutputStream()
+            try {
+                val bais = ByteArrayInputStream(bytes)
+                val lzma = LzmaOutputStream(baos, ENCODER_WRAPPER)
+                bais.writeTo(lzma)
+                baos.close()
+                lzma.close()
+                bais.close()
+            } catch (e: IOException) {
+                e.printStackTrace()
+            }
+            return baos.toByteArray()
         }
-        return baos.toByteArray()
     }
 
     override fun decompress(buffer: InputBuffer, compressedSize: Int, decompressedSize: Int): ByteArray {
