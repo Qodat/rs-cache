@@ -1,6 +1,8 @@
 plugins {
     kotlin("jvm")
     id("com.github.johnrengelman.shadow")
+    id("org.jetbrains.kotlinx.benchmark") version "0.4.10"
+    kotlin("plugin.allopen") version "1.9.0"
 
     `maven-publish`
     signing
@@ -19,6 +21,10 @@ dependencies {
     implementation("com.github.jponge:lzma-java:1.3")
     implementation("org.apache.ant:ant:1.10.14")
     implementation("com.displee:disio:2.2")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3")
+
+    // Benchmark dependencies
+    implementation("org.jetbrains.kotlinx:kotlinx-benchmark-runtime:0.4.10")
 }
 
 java {
@@ -80,4 +86,19 @@ publishing {
 
 signing {
     sign(publishing.publications["mavenJava"])
+}
+
+// Configure the allopen plugin to make benchmark classes open
+allOpen {
+    annotation("org.openjdk.jmh.annotations.State")
+}
+
+// Configure the benchmark plugin
+benchmark {
+    targets {
+        register("main") {
+            this as kotlinx.benchmark.gradle.JvmBenchmarkTarget
+            jmhVersion = "1.37"
+        }
+    }
 }
