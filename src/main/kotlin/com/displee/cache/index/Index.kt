@@ -134,7 +134,7 @@ open class Index(origin: CacheLibrary, id: Int, val raf: RandomAccessFile) : Ref
         check(!closed) { "Index is closed." }
         synchronized(origin.mainFile) {
             try {
-                if (origin.mainFile.length() < INDEX_SIZE * id + INDEX_SIZE) {
+                if (raf.length() < INDEX_SIZE.toLong() * id + INDEX_SIZE) {
                     return@synchronized null
                 }
                 val sectorData = ByteArray(SECTOR_SIZE)

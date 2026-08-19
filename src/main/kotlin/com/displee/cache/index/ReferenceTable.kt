@@ -320,14 +320,21 @@ open class ReferenceTable(protected val origin: CacheLibrary, val id: Int) : Com
     open suspend fun archiveAsync(id: Int, xtea: IntArray? = null, direct: Boolean = false): Archive? {
         check(!origin.closed) { "Cache is closed." }
         val archive = archives[id] ?: return null
-        if (direct || archive.read || archive.new) {
+        if (direct) {
+            return archive
+        }
+        // A previous failed sector read used to mark the archive read/new and clear it,
+        // which permanently hid valid models during concurrent cache access.
+        if (archive.read && !archive.containsData() && !archive.flagged()) {
+            archive.read = false
+            archive.new = false
+        }
+        if (archive.read || archive.new) {
             return archive
         }
         val sector = origin.index(this.id).readArchiveSectorAsync(id)
         if (sector == null) {
-            archive.read = true
-            archive.new = true
-            archive.clear()
+            return if (archive.containsData()) archive else null
         } else {
             val is317 = is317()
             if (is317) {
