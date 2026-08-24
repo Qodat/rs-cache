@@ -1,5 +1,6 @@
 plugins {
     kotlin("jvm")
+    `java-library`
     id("com.github.johnrengelman.shadow")
     id("org.jetbrains.kotlinx.benchmark") version "0.4.10"
     kotlin("plugin.allopen") version "1.9.0"
@@ -20,7 +21,7 @@ kotlin {
 dependencies {
     implementation("com.github.jponge:lzma-java:1.3")
     implementation("org.apache.ant:ant:1.10.14")
-    implementation("com.displee:disio:2.2")
+    api("com.displee:disio:2.2")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3")
 
     // Benchmark dependencies
